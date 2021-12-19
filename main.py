@@ -13,7 +13,7 @@ def main():
 
     print("Performing GeoIP lookups")
     # Perform GeoIP lookup
-    geoList = ipToolbox.geoLookup(ipList)
+    # geoList = ipToolbox.geoLookup(ipList)
 
     print("Performing RDAP lookups")
     # Perform RDAP lookup
@@ -21,17 +21,18 @@ def main():
 
     print("Reading collected jsons")
     # Read the json strings
-    geo_results = ipToolbox.jsonListRead(geoList)
+    # geo_results = ipToolbox.jsonListRead(geoList)
     rdap_results = ipToolbox.jsonListRead(rdapList)
 
     print("Writing to output file")
     # Write to output files
-    ipToolbox.jsonListWriteGeo(geo_results, "GeoIP_output.txt")
+    # ipToolbox.jsonListWriteGeo(geo_results, "GeoIP_output.txt")
     ipToolbox.jsonListWriteRdap(rdap_results, "RDAP_output.txt")
 
     # Stop clock
     elapsed_time = time() - start
 
-    print(str(elapsed_time) + " seconds")
+    with open(ipToolbox.LOG_FILE, 'a') as file:
+        file.write(str(elapsed_time) + " seconds")
 
 main()

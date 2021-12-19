@@ -8,13 +8,15 @@ import time
 
 # TODO
 # - Rework prettifying RDAP output
-# - Work on handling non-200 code errors in RDAP
+# - Handle 404 codes and output for it accordingly
+# - 
 
 # Used in multiple functions
 MAX_WORKERS = cpu_count() # Used for multithreading
 PATTERN = re.compile(r"\d+.\d+.\d+.\d+") # IP address regex pattern
 GEO_SERVER = "https://reallyfreegeoip.org/json/"    # GeoIP lookup server
 RDAP_SERVER = "https://rdap.arin.net/bootstrap/ip/" # RDAP lookup server
+LOG_FILE = "log.txt"
 
 # parses a text file for IP addresses
 def ipParse(textfile):
@@ -24,7 +26,7 @@ def ipParse(textfile):
     with open(textfile, 'r') as file:
         for line in file:
             for match in re.finditer(PATTERN, line):
-                matchList.append(match.group())
+                matchList.append(ipFind(match.group()))
 
     return matchList
 
@@ -48,24 +50,43 @@ def geoLookup(ipList):
 
 # Single RDAP query
 # Returns a requests.Match object which contains the json
-# Previous attempts to handle non-200 codes were unsuccessful
 def rdap_request(ip, session):
     fail_count = 0
+    url = RDAP_SERVER + ip
 
     while True:
         try:
             # url = urlLoop.front() + ip
-            url = RDAP_SERVER + ip
-            response = session.get(url, headers={"accept": "application/json"})
+            # url = RDAP_SERVER + ip
+            response = session.get(url)
+            status_code = response.status_code
+            # print(response.status_code)
+            # print(type(response.status_code))
+
+            # print(response.status_code is not 200)
 
             if fail_count > 2:
-                error_dict = "{'ip' : '" + ip + "', 'Error' : 'No data returned'}"
-                return error_dict
+                with open(LOG_FILE, 'a') as file:
+                    file.write(str(status_code) + " returned for ip " + ip + "\n")
+                return None
+
+            # Create useful and readable output for 404s 
+            if status_code == 404:
+                return None
+            elif status_code == 406:
+                print("406 error")
+                fail_count += 1
+                continue
+            elif status_code == 429: 
+                # code 429: too many requests
+                time.sleep(4)
+                continue
+            elif status_code != 200:
+                fail_count += 1
+                continue
 
         except requests.exceptions.ConnectionError:
-            # urlLoop.next()
-            time.sleep(3)
-            fail_count += 1
+            time.sleep(4)
             continue
             
         else:
@@ -75,14 +96,19 @@ def rdap_request(ip, session):
 
 # Looks up RDAP info for a list of IP addresses
 def rdapLookup(ipList):
+    with open(LOG_FILE, 'w') as file:
+        file.truncate()
+
     sesh = requests.Session()
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
         responseList = list(pool.map(rdap_request, ipList, itertools.repeat(sesh)))
 
+
     return responseList
 
 # Reads a list of json strings
+# Handle 404s
 def jsonListRead(str_list):
     json_list = []
     temp_dict = {}
@@ -132,8 +158,10 @@ def prettify_geo(temp_dict):
     return out_str
 
 # Prettifies RDAP output (kinda)
-# want to improve this, but I need to work out the RDAP 404 and 406 errors 
-# as of now only outputs limited info 
+# as of now only outputs limited info
+# TODO:
+# - display relevant info for 404 responses
+# - Expand data that is displayed 
 def prettify_rdap(temp_dict):
     out_str = ""
     ip = ""
@@ -161,3 +189,8 @@ def prettify_rdap(temp_dict):
         out_str = "IP: " + ip + "\n" + "OWNER: " +  owner + "\n\n"
         # print(out_str)
         return out_str
+
+# maybe unused function, but may be useful for output
+def list_print(List):
+    for elem in List:
+        print(elem)
