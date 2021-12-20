@@ -32,6 +32,7 @@ def main():
     # Stop clock
     elapsed_time = time() - start
 
-    print(str(elapsed_time) + " seconds")
+    with open(ipToolbox.LOG_FILE, 'a') as file:
+        file.write(str(elapsed_time) + " seconds")
 
 main()
