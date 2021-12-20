@@ -6,11 +6,6 @@ from concurrent.futures import ThreadPoolExecutor
 import itertools
 import time
 
-# TODO
-# - Rework prettifying RDAP output
-# - Handle 404 codes and output for it accordingly
-# - 
-
 # Used in multiple functions
 MAX_WORKERS = cpu_count() # Used for multithreading
 PATTERN = re.compile(r"\d+.\d+.\d+.\d+") # IP address regex pattern
@@ -49,52 +44,50 @@ def geoLookup(ipList):
     return responseList
 
 # Single RDAP query
-# Returns a requests.Match object which contains the json
+# Returns tuple of the form (ip, status, response_str)
 def rdap_request(ip, session):
-    fail_count = 0
     url = RDAP_SERVER + ip
 
-    while True:
-        try:
-            # url = urlLoop.front() + ip
-            # url = RDAP_SERVER + ip
-            response = session.get(url)
-            status_code = response.status_code
-            # print(response.status_code)
-            # print(type(response.status_code))
+    with open(LOG_FILE, 'a') as file:
+        while True:
+            try:
+                response = session.get(url)
+                status_code = response.status_code
+                end_tuple = (ip, status_code, response.text)
 
-            # print(response.status_code is not 200)
+                if status_code == 404:
+                    file.write(str(response) + "\n")
+                    return end_tuple
+                elif status_code == 406:
+                    file.write(str(response) + "\n")
+                    file.write(response.text)
+                    continue
+                elif status_code == 429: 
+                    # code 429: too many requests
+                    file.write(str(response) + "\n")
+                    time.sleep(5)
+                    continue
+                elif status_code == 504:
+                    file.write(str(response) + "\n")
+                    time.sleep(5)
+                    continue
+                elif status_code != 200:
+                    file.write(str(response) + "\n")
+                    file.write(response.text + "\n")
+                    continue
 
-            if fail_count > 2:
-                with open(LOG_FILE, 'a') as file:
-                    file.write(str(status_code) + " returned for ip " + ip + "\n")
-                return None
-
-            # Create useful and readable output for 404s 
-            if status_code == 404:
-                return None
-            elif status_code == 406:
-                print("406 error")
-                fail_count += 1
-                continue
-            elif status_code == 429: 
-                # code 429: too many requests
+            except requests.exceptions.ConnectionError:
+                file.write("connection error caught\n")
                 time.sleep(4)
                 continue
-            elif status_code != 200:
-                fail_count += 1
-                continue
-
-        except requests.exceptions.ConnectionError:
-            time.sleep(4)
-            continue
-            
-        else:
-            break
+                
+            else:
+                break
     
-    return response.text
+    return end_tuple
 
 # Looks up RDAP info for a list of IP addresses
+# returns a list of tuples of (ip address, status code, response text)
 def rdapLookup(ipList):
     with open(LOG_FILE, 'w') as file:
         file.truncate()
@@ -102,39 +95,37 @@ def rdapLookup(ipList):
     sesh = requests.Session()
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        responseList = list(pool.map(rdap_request, ipList, itertools.repeat(sesh)))
+        responseTupleList = list(pool.map(rdap_request, ipList, itertools.repeat(sesh)))
 
-
-    return responseList
+    return responseTupleList
 
 # Reads a list of json strings
-# Handle 404s
-def jsonListRead(str_list):
+def jsonListRead(response_list):
     json_list = []
-    temp_dict = {}
+    json_dict = {}
 
-    for jstring in str_list:
-        try:
-            temp_dict = json.loads(jstring)
+    if(type(response_list[0]) == tuple):
+        for ip, status, string in response_list:
+            json_dict['ip'] = ip
+            json_dict['status_code'] = status
+            json_dict['contents'] = json.loads(string)
+            json_list.append(json_dict)
         
-        except TypeError:
-            temp_dict = {"Error" : "argument was not a string"}
-        
-        except ValueError:
-            if len(jstring) > 1:
-                temp_dict = eval(jstring)
-            else:
-                temp_dict = {"Error" : "argument was not in dictionary structure"}
-        finally:
-            json_list.append(temp_dict)
-    
+    elif(type(response_list[0]) == str):
+        for jstring in response_list:
+            json_dict = json.loads(jstring)
+            json_list.append(json_dict)
+
+    else: 
+        print("not a string or tuple")
+
     return json_list
 
 # Writes RDAP info to output   
 def jsonListWriteRdap(json_list, output_file):
     with open(output_file, 'w+') as file:
         for j_dict in json_list:
-            file.write(prettify_rdap(j_dict)) 
+            file.write(prettify_rdap(j_dict) + "\n") 
 
     return None
 
@@ -157,40 +148,26 @@ def prettify_geo(temp_dict):
     
     return out_str
 
-# Prettifies RDAP output (kinda)
-# as of now only outputs limited info
-# TODO:
-# - display relevant info for 404 responses
-# - Expand data that is displayed 
-def prettify_rdap(temp_dict):
+def print_dict(diction):
     out_str = ""
-    ip = ""
-    owner = ""
 
-    # I don't like how this is structured. I feel like there's a better way to parse it.
-    try:
-        qurl = temp_dict['links'][0]['value']
-        ip = ipFind(qurl)
-        owner = temp_dict['entities'][0]['vcardArray'][1][1][3]
+    for key, value in diction.items():
+        out_str += key + ": " + str(value) + "\n"
+    
+    return out_str + "\n"
 
-    except KeyError:
-        # Haven't seen this output get spit out
-        try:
-            qurl = temp_dict['notices'][2]['links'][0]['value']
-            ip = temp_dict['ip']
-            owner = "OWNER_NOT_FOUND"
-        
-        except KeyError:
-            qurl = temp_dict['notices'][2]['links'][0]['value']
-            ip = ipFind(qurl)
-            owner = temp_dict['entities'][3]['vcardArray'][1][1][3]
+# Prettifies RDAP output 
+# Could stand to display the contents a little nicer (make print_dict recursive?)
+def prettify_rdap(temp_dict):
+    out_str = "IP: " + temp_dict['ip']
 
-    finally:
-        out_str = "IP: " + ip + "\n" + "OWNER: " +  owner + "\n\n"
-        # print(out_str)
+    if(temp_dict['status_code'] != 200):
+        out_str += temp_dict['ip']  + " returned with HTTP code " + str(temp_dict['status_code']) + "\n"
         return out_str
+    
+    else:
+        out_str += "\n"
 
-# maybe unused function, but may be useful for output
-def list_print(List):
-    for elem in List:
-        print(elem)
+    out_str += print_dict(temp_dict['contents'])
+    
+    return out_str
